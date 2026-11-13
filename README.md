@@ -12,9 +12,9 @@ After the first deployment, add `GEMINI_API_KEY` under **Workers & Pages → you
 
 You need Python 3.13+ and a Gemini API key.
 
-1. Install [uv](https://docs.astral.sh/uv/), then run `uv sync --group dev`.
+1. Install [uv](https://docs.astral.sh/uv/), then run `uv sync`.
 2. Copy `.env.example` to `.env` and replace the placeholder with your Gemini API key. Keep the file private.
-3. Start the app with `uv run uvicorn server:app --reload`, then open <http://127.0.0.1:8000>.
+3. Start the app with `uv run --with uvicorn uvicorn server:app --reload`, then open <http://127.0.0.1:8000>.
 
 `GET /api/health` reports whether the server sees a Gemini key. `POST /api/summarize` accepts JSON such as `{"url":"https://youtu.be/jNQXAC9IVRw","style":"quick"}`. Styles are `quick`, `detailed`, and `bullets`.
 
