@@ -9,8 +9,8 @@ from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from google import genai
-from google.genai import types
+from workers import fetch
+import json
 from pydantic import BaseModel, Field
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -65,7 +65,7 @@ def get_transcript(video_id: str) -> tuple[str, str]:
         ) from exc
 
 
-def make_summary(transcript: str, style: str, key: str | None = None, model: str | None = None) -> str:
+async def make_summary(transcript: str, style: str, key: str | None = None, model: str | None = None) -> str:
     key = key or os.getenv("GEMINI_API_KEY")
     if not key:
         raise HTTPException(status_code=503, detail="The server is missing GEMINI_API_KEY. Add it to the Cloudflare Worker secrets.")
@@ -75,20 +75,28 @@ def make_summary(transcript: str, style: str, key: str | None = None, model: str
         "detailed": "Write structured, detailed notes with a short overview, important points, examples, and a brief conclusion.",
         "bullets": "Give a one-sentence overview followed by 5-8 specific, useful bullet-point takeaways.",
     }[style]
+    prompt = (
+        "Summarize the supplied YouTube transcript faithfully. Do not invent facts or claim details that are not in the transcript. "
+        "If the transcript is incomplete or unclear, say so. " + instructions +
+        "\n\nTranscript:\n" + transcript[:120_000]
+    )
     try:
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(
-            model=model,
-            contents=(
-                "Summarize the supplied YouTube transcript faithfully. Do not invent facts or claim details that are not in the transcript. "
-                "If the transcript is incomplete or unclear, say so. " + instructions +
-                "\n\nTranscript:\n" + transcript[:120_000]
-            ),
-            config=types.GenerateContentConfig(
-                max_output_tokens=1400 if style == "detailed" else 800,
-            ),
+        response = await fetch(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+            method="POST",
+            headers={"content-type": "application/json"},
+            body=json.dumps({
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"maxOutputTokens": 1400 if style == "detailed" else 800},
+            }),
         )
-        summary = (response.text or "").strip()
+        data = dict(await response.json())
+        if response.status >= 400:
+            logger.error("Gemini API returned HTTP %s", response.status)
+            raise HTTPException(status_code=502, detail="Gemini could not complete the summary. Check the Gemini API key, model access, and free-tier limits in Google AI Studio.")
+        candidates = data.get("candidates") or []
+        parts = (candidates[0].get("content", {}).get("parts", []) if candidates else [])
+        summary = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
         if not summary:
             raise HTTPException(status_code=502, detail="Gemini returned an empty summary. Please try again.")
         return summary
@@ -97,7 +105,6 @@ def make_summary(transcript: str, style: str, key: str | None = None, model: str
     except Exception as exc:
         logger.exception("Gemini summary request failed")
         raise HTTPException(status_code=502, detail="Gemini could not complete the summary. Check the Gemini API key, model access, and free-tier limits in Google AI Studio.") from exc
-
 
 @app.get("/")
 async def home(request: Request):
@@ -117,11 +124,11 @@ def health(request: Request):
 
 
 @app.post("/api/summarize")
-def summarize(body: SummaryRequest, request: Request):
+async def summarize(body: SummaryRequest, request: Request):
     video_id = get_video_id(body.url)
     transcript, language = get_transcript(video_id)
     env = request.scope.get("env")
-    summary = make_summary(
+    summary = await make_summary(
         transcript,
         body.style,
         key=getattr(env, "GEMINI_API_KEY", None),
