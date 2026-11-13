@@ -4,12 +4,11 @@ from __future__ import annotations
 import os
 import re
 import logging
-from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -17,7 +16,6 @@ from youtube_transcript_api import YouTubeTranscriptApi
 
 load_dotenv()
 app = FastAPI(title="KS Projects YouTube Summarizer", version="1.0.0")
-ROOT = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 
 
@@ -67,11 +65,11 @@ def get_transcript(video_id: str) -> tuple[str, str]:
         ) from exc
 
 
-def make_summary(transcript: str, style: str) -> str:
-    key = os.getenv("GEMINI_API_KEY")
+def make_summary(transcript: str, style: str, key: str | None = None, model: str | None = None) -> str:
+    key = key or os.getenv("GEMINI_API_KEY")
     if not key:
-        raise HTTPException(status_code=503, detail="The server is missing GEMINI_API_KEY. Add it to the Render environment settings.")
-    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+        raise HTTPException(status_code=503, detail="The server is missing GEMINI_API_KEY. Add it to the Cloudflare Worker secrets.")
+    model = model or os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     instructions = {
         "quick": "Write a concise recap in 4-6 sentences, followed by 3 key takeaways.",
         "detailed": "Write structured, detailed notes with a short overview, important points, examples, and a brief conclusion.",
@@ -102,20 +100,33 @@ def make_summary(transcript: str, style: str) -> str:
 
 
 @app.get("/")
-def home():
-    return FileResponse(ROOT / "index.html")
+async def home(request: Request):
+    env = request.scope.get("env")
+    if env is None:
+        from fastapi.responses import FileResponse
+        from pathlib import Path
+        return FileResponse(Path(__file__).resolve().parent / "index.html")
+    asset = await env.ASSETS.fetch("https://assets.local/index.html")
+    return Response(content=await asset.bytes(), status_code=asset.status, headers=asset.headers)
 
 
 @app.get("/api/health")
-def health():
-    return {"ok": True, "ai_configured": bool(os.getenv("GEMINI_API_KEY"))}
+def health(request: Request):
+    env = request.scope.get("env")
+    return {"ok": True, "ai_configured": bool(getattr(env, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY"))}
 
 
 @app.post("/api/summarize")
-def summarize(request: SummaryRequest):
-    video_id = get_video_id(request.url)
+def summarize(body: SummaryRequest, request: Request):
+    video_id = get_video_id(body.url)
     transcript, language = get_transcript(video_id)
-    summary = make_summary(transcript, request.style)
+    env = request.scope.get("env")
+    summary = make_summary(
+        transcript,
+        body.style,
+        key=getattr(env, "GEMINI_API_KEY", None),
+        model=getattr(env, "GEMINI_MODEL", None),
+    )
     return {
         "url": f"https://www.youtube.com/watch?v={video_id}",
         "title": "Video summary",
