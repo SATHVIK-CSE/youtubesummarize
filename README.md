@@ -4,30 +4,17 @@ A small full-stack site. The browser sends a YouTube link and summary style to a
 
 ## Deploy to Cloudflare Workers
 
-This repository is configured as a Python Worker with static assets. Cloudflare Workers Builds can deploy it from GitHub using `uv run --group dev pywrangler deploy`.
+This repository is configured as a Python Worker with static assets. Cloudflare Workers Builds deploys it from GitHub with `uv run --group dev pywrangler deploy`.
 
 After the first deployment, add `GEMINI_API_KEY` under **Workers & Pages → youtubesummarize → Settings → Variables and Secrets** as an encrypted secret. `GEMINI_MODEL` defaults to `gemini-3.8-flash` and can be changed in `wrangler.jsonc`. Keep API keys out of Git.
 
 ## Run locally on Windows
 
-You need Python 3.10+ and a Gemini API key.
+You need Python 3.13+ and a Gemini API key.
 
-1. Create and activate a virtual environment:
-
-   ```powershell
-   py -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-2. Install packages and configure the key:
-
-   ```powershell
-   pip install -r requirements.txt
-   Copy-Item .env.example .env
-   ```
-
-3. Edit `.env`, replacing the placeholder with your Gemini API key. Keep the file private.
-4. Start the app with `uvicorn server:app --reload`, then open <http://127.0.0.1:8000>.
+1. Install [uv](https://docs.astral.sh/uv/), then run `uv sync --group dev`.
+2. Copy `.env.example` to `.env` and replace the placeholder with your Gemini API key. Keep the file private.
+3. Start the app with `uv run uvicorn server:app --reload`, then open <http://127.0.0.1:8000>.
 
 `GET /api/health` reports whether the server sees a Gemini key. `POST /api/summarize` accepts JSON such as `{"url":"https://youtu.be/jNQXAC9IVRw","style":"quick"}`. Styles are `quick`, `detailed`, and `bullets`.
 
