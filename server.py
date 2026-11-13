@@ -3,19 +3,22 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field
 from youtube_transcript_api import YouTubeTranscriptApi
 
 load_dotenv()
 app = FastAPI(title="KS Projects YouTube Summarizer", version="1.0.0")
 ROOT = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
 class SummaryRequest(BaseModel):
@@ -65,28 +68,37 @@ def get_transcript(video_id: str) -> tuple[str, str]:
 
 
 def make_summary(transcript: str, style: str) -> str:
-    key = os.getenv("OPENAI_API_KEY")
+    key = os.getenv("GEMINI_API_KEY")
     if not key:
-        raise HTTPException(status_code=503, detail="The server is missing OPENAI_API_KEY. Add it to the .env file and restart the server.")
-    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        raise HTTPException(status_code=503, detail="The server is missing GEMINI_API_KEY. Add it to the Render environment settings.")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     instructions = {
         "quick": "Write a concise recap in 4-6 sentences, followed by 3 key takeaways.",
         "detailed": "Write structured, detailed notes with a short overview, important points, examples, and a brief conclusion.",
         "bullets": "Give a one-sentence overview followed by 5-8 specific, useful bullet-point takeaways.",
     }[style]
     try:
-        response = OpenAI(api_key=key).responses.create(
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(
             model=model,
-            instructions=(
+            contents=(
                 "Summarize the supplied YouTube transcript faithfully. Do not invent facts or claim details that are not in the transcript. "
-                "If the transcript is incomplete or unclear, say so. " + instructions
+                "If the transcript is incomplete or unclear, say so. " + instructions +
+                "\n\nTranscript:\n" + transcript[:120_000]
             ),
-            input=transcript[:120_000],
-            max_output_tokens=1400 if style == "detailed" else 800,
+            config=types.GenerateContentConfig(
+                max_output_tokens=1400 if style == "detailed" else 800,
+            ),
         )
-        return response.output_text.strip()
+        summary = (response.text or "").strip()
+        if not summary:
+            raise HTTPException(status_code=502, detail="Gemini returned an empty summary. Please try again.")
+        return summary
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="The AI summary service could not complete the request. Check the server API key and model settings.") from exc
+        logger.exception("Gemini summary request failed")
+        raise HTTPException(status_code=502, detail="Gemini could not complete the summary. Check the Gemini API key, model access, and free-tier limits in Google AI Studio.") from exc
 
 
 @app.get("/")
@@ -96,7 +108,7 @@ def home():
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "ai_configured": bool(os.getenv("OPENAI_API_KEY"))}
+    return {"ok": True, "ai_configured": bool(os.getenv("GEMINI_API_KEY"))}
 
 
 @app.post("/api/summarize")
