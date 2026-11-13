@@ -5,7 +5,6 @@ description = "YouTube summarizer deployed on Cloudflare Workers"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115,<1.0",
-    "google-genai>=1.0,<2.0",
     "youtube-transcript-api>=1.2,<2.0",
     "python-dotenv>=1.0,<2.0",
 ]
